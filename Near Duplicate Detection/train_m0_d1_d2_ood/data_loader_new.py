@@ -14,7 +14,14 @@ from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoConfig, AutoModelForTokenClassification, AutoModel, BertPreTrainedModel
 from torch import cuda
 import numpy as np
+import csv
+import gensim
 
+def read_dataset(data_path):
+    with open(data_path, 'rb') as inp:
+        data = pickle.load(inp)
+    return data
+    
 MAX_LEN = 512
 
 def tokenize_sent(sentence, tokenizer):
@@ -29,7 +36,7 @@ def tokenize_sent(sentence, tokenizer):
 
     return tokenized_sentence
 
-class mnli_dataset(Dataset):
+class qqp_dataset(Dataset):
     def __init__(self, sentence1, sentence2, label, tokenizer, max_len):
         self.len = len(sentence1)
         self.sentence1 = sentence1
@@ -44,11 +51,6 @@ class mnli_dataset(Dataset):
         sent1 = self.sentence1[idx]
         sent2 = self.sentence2[idx]
         label = self.label[idx]
-        # print(sent1)
-        # print(sent2)
-        # print(label)
-        label_dict = {'contradiction' : 0, 'neutral' : 1, 'entailment' : 2}
-        label = label_dict[label]
         target = []
         target.append(label)
         
@@ -80,140 +82,16 @@ class mnli_dataset(Dataset):
             'target': torch.tensor(target, dtype=torch.long)
         }
 
-def load_mnli(file_path,tokenizer):
+def load_qqp(file_path,tokenizer, id_ood=None):
     sentence1_list = []
     sentence2_list = []
     target_label_list = []
 
-    with open(file_path, 'r', encoding='utf-8') as file:
-        for line in file:
-            parts = line.strip().split('\t')
-            label = parts[0]
-            if len(parts) == 11:
-            	sentence1 = parts[-6]
-            	sentence2 = parts[-5]
-            elif len(parts) == 15:
-            	sentence1 = parts[-10]
-            	sentence2 = parts[-9]
-            
-            if label == 'contradiction' or label == 'entailment' or label == 'neutral':
-                target_label_list.append(label)
-                sentence1_list.append(sentence1)
-                sentence2_list.append(sentence2)
+    dataframe = pd.read_csv(file_path)
+    sentence1_list = dataframe['question1'].tolist()
+    sentence2_list = dataframe['question2'].tolist()
+    target_label_list = dataframe['is_duplicate'].tolist()
 
-    print(len(sentence1_list))
-    path = file_path.split('.')
-    np.savetxt('./multinli_1.0/' + path[-2] + '_groundtruth.txt', target_label_list, '%s')
-    data = mnli_dataset(sentence1_list, sentence2_list, target_label_list, tokenizer, MAX_LEN)
-    return data
-
-class hans_dataset(Dataset):
-    def __init__(self, sentence1, sentence2, label, tokenizer, max_len):
-        self.len = len(sentence1)
-        self.sentence1 = sentence1
-        self.sentence2 = sentence2
-        self.label = label
-        self.max_len = max_len
-        self.tokenizer = tokenizer
-    def __len__(self):
-        return self.len
-
-    def __getitem__(self, idx):
-        sent1 = self.sentence1[idx]
-        sent2 = self.sentence2[idx]
-        label = self.label[idx]
-        # print(sent1)
-        # print(sent2)
-        # print(label)
-        label_dict = {'non-entailment' : 1, 'entailment' : 2}
-        label = label_dict[label]
-        # print(label)
-        target = []
-        target.append(label)
-        
-        token_type_ids = []
-        token_type_ids.append(0)
-        sent1 = tokenize_sent(sent1,self.tokenizer)
-        sent2 = tokenize_sent(sent2,self.tokenizer)
-        for i in enumerate(sent1):
-            token_type_ids.append(0)
-        token_type_ids.append(1)
-        for i in enumerate(sent2):
-            token_type_ids.append(1)
-        token_type_ids.append(1)
-        
-        
-        input_sent = ['[CLS]'] + sent1 + ['[SEP]'] + sent2 + ['[SEP]']
-        # print(input_sent)
-        input_sent = input_sent + ['[PAD]' for _ in range(self.max_len - len(input_sent))]
-        token_type_ids = token_type_ids + [0 for _ in range(self.max_len - len(token_type_ids))]
-        # print(input_sent)
-        attn_mask = [1 if tok != '[PAD]' else 0 for tok in input_sent]
-        ids = self.tokenizer.convert_tokens_to_ids(input_sent)
-        # print(len(ids))
-        return {
-            'index' : idx,
-            'ids' : torch.tensor(ids, dtype=torch.long),
-            'mask': torch.tensor(attn_mask, dtype=torch.long),
-            'token_type_ids' : torch.tensor(token_type_ids, dtype = torch.long),
-            'target': torch.tensor(target, dtype=torch.long)
-        }
-
-def load_hans(file_path,tokenizer):
-    sentence1_list = []
-    sentence2_list = []
-    target_label_list = []
-
-    with open(file_path, 'r', encoding='utf-8') as file:
-        for line in file:
-            parts = line.strip().split('\t')
-            label = parts[0]
-            sentence1 = parts[-6]
-            sentence2 = parts[-5]
-            # print(f'label : {label} , sentence 1 : {sentence1} ,  sentence 2 : {sentence2}')
-            if label == 'non-entailment' or label == 'entailment':
-                target_label_list.append(label)
-                sentence1_list.append(sentence1)
-                sentence2_list.append(sentence2)
-
-    print(len(sentence1_list))
-    path = file_path.split('.')
-    np.savetxt('.' + path[-2] + '_groundtruth.txt', target_label_list, '%s')
-    data = hans_dataset(sentence1_list, sentence2_list, target_label_list, tokenizer, MAX_LEN)
-    # print(data[0])
-    return data
-
-
-def load_snli(file_path,tokenizer, id_ood=None):
-    sentence1_list = []
-    sentence2_list = []
-    target_label_list = []
-
-    with open(file_path, 'r', encoding='utf-8') as file:
-        for line in file:
-            parts = line.strip().split('\t')
-            if len(parts) == 10:
-            	sentence1= parts[-5]
-            	sentence2 = parts[-4]
-            elif len(parts) == 12:
-            	sentence1 = parts[-7]
-            	sentence2 = parts[-6]
-            elif len(parts) == 13:
-            	sentence1 = parts[-8]
-            	sentence2 = parts[-7]
-            elif len(parts) == 14:
-            	sentence1 = parts[-9]
-            	sentence2 = parts[-8]
-            
-            label = parts[0]
-
-            if label == 'contradiction' or label == 'entailment' or label == 'neutral':
-                target_label_list.append(label)
-                sentence1_list.append(sentence1)
-                sentence2_list.append(sentence2)
-    # print(sentence1_list[0])
-    # print(sentence2_list[0])
-    # print(target_label_list[0])
     sentence1_list_id = []
     sentence1_list_ood = []
     sentence2_list_id = []
@@ -221,12 +99,103 @@ def load_snli(file_path,tokenizer, id_ood=None):
     target_label_list_id = []
     target_label_list_ood = []
 
+    """
+    print(sentence1_list[0])
+    print(len(sentence1_list))
+    print(sentence2_list[0])
+    print(len(sentence2_list))
+    """
+    if id_ood == None: 
+     
+    	path = file_path.split('.')
+    	#np.savetxt('./QQP/qqp_groundtruth.txt', target_label_list, '%s')
+    	data = qqp_dataset(sentence1_list, sentence2_list, target_label_list, tokenizer, MAX_LEN)
+    	return data
+    else:
+        assert(len(id_ood) == len(sentence1_list))
+        for i,label in enumerate(id_ood):
+            if label == 0:
+                sentence1_list_id.append(sentence1_list[i])
+                sentence2_list_id.append(sentence2_list[i])
+                target_label_list_id.append(target_label_list[i])
+            else:
+                sentence1_list_ood.append(sentence1_list[i])
+                sentence2_list_ood.append(sentence2_list[i])
+                target_label_list_ood.append(target_label_list[i])
+                
+        data_id = qqp_dataset(sentence1_list_id, sentence2_list_id, target_label_list_id, tokenizer, MAX_LEN)
+        data_ood = qqp_dataset(sentence1_list_ood, sentence2_list_ood, target_label_list_ood, tokenizer, MAX_LEN)
+        return data_id, data_ood
+
+class paws_dataset(Dataset):
+    def __init__(self, sentence1, sentence2, label, tokenizer, max_len):
+        self.len = len(sentence1)
+        self.sentence1 = sentence1
+        self.sentence2 = sentence2
+        self.label = label
+        self.max_len = max_len
+        self.tokenizer = tokenizer
+    def __len__(self):
+        return self.len
+
+    def __getitem__(self, idx):
+        sent1 = self.sentence1[idx]
+        sent2 = self.sentence2[idx]
+        label = self.label[idx]
+        # print(sent1)
+        target = []
+        target.append(label)
+        
+        token_type_ids = []
+        token_type_ids.append(0)
+        sent1 = tokenize_sent(sent1,self.tokenizer)
+        sent2 = tokenize_sent(sent2,self.tokenizer)
+        for i in enumerate(sent1):
+            token_type_ids.append(0)
+        token_type_ids.append(1)
+        for i in enumerate(sent2):
+            token_type_ids.append(1)
+        token_type_ids.append(1)
+        
+        
+        input_sent = ['[CLS]'] + sent1 + ['[SEP]'] + sent2 + ['[SEP]']
+        # print(input_sent)
+        input_sent = input_sent + ['[PAD]' for _ in range(self.max_len - len(input_sent))]
+        token_type_ids = token_type_ids + [0 for _ in range(self.max_len - len(token_type_ids))]
+        # print(input_sent)
+        attn_mask = [1 if tok != '[PAD]' else 0 for tok in input_sent]
+        ids = self.tokenizer.convert_tokens_to_ids(input_sent)
+        # print(len(ids))
+        return {
+            'index' : idx,
+            'ids' : torch.tensor(ids, dtype=torch.long),
+            'mask': torch.tensor(attn_mask, dtype=torch.long),
+            'token_type_ids' : torch.tensor(token_type_ids, dtype = torch.long),
+            'target': torch.tensor(target, dtype=torch.long)
+        }
+
+def load_paws(file_path,tokenizer, id_ood=None):
+    sentence1_list = []
+    sentence2_list = []
+    target_label_list = []
+
+    dataframe = pd.read_csv(file_path, delimiter='\t')
+    sentence1_list = dataframe['sentence1'].tolist()
+    sentence2_list = dataframe['sentence2'].tolist()
+    target_label_list = dataframe['label'].tolist()
     
+    sentence1_list_id = []
+    sentence1_list_ood = []
+    sentence2_list_id = []
+    sentence2_list_ood = []
+    target_label_list_id = []
+    target_label_list_ood = []
+
     if id_ood == None:
-        data = mnli_dataset(sentence1_list, sentence2_list, target_label_list, tokenizer, MAX_LEN)
-        print(len(sentence1_list))
         path = file_path.split('.')
-        np.savetxt('./snli_1.0/' + path[-2] + '_groundtruth.txt', target_label_list, '%s')
+        #np.savetxt('.' + path[-2] + '_groundtruth.txt', target_label_list, '%s')
+        data = paws_dataset(sentence1_list, sentence2_list, target_label_list, tokenizer, MAX_LEN)
+        # print(data[0])
         return data
     else: 
         assert(len(id_ood) == len(sentence1_list))
@@ -239,6 +208,54 @@ def load_snli(file_path,tokenizer, id_ood=None):
                 sentence1_list_ood.append(sentence1_list[i])
                 sentence2_list_ood.append(sentence2_list[i])
                 target_label_list_ood.append(target_label_list[i])
-        data_id = mnli_dataset(sentence1_list_id, sentence2_list_id, target_label_list_id, tokenizer, MAX_LEN)
-        data_ood = mnli_dataset(sentence1_list_ood, sentence2_list_ood, target_label_list_ood, tokenizer, MAX_LEN)
+        data_id = paws_dataset(sentence1_list_id, sentence2_list_id, target_label_list_id, tokenizer, MAX_LEN)
+        data_ood = paws_dataset(sentence1_list_ood, sentence2_list_ood, target_label_list_ood, tokenizer, MAX_LEN)
+        return data_id, data_ood
+        
+def load_mrpc(file_path,tokenizer, id_ood=None):
+    sentence1_list = []
+    sentence2_list = []
+    target_label_list = []
+
+    Train_Data_File, Test_Data_File = file_path
+
+
+    df1 = pd.read_csv(Train_Data_File, sep='\t', quoting=csv.QUOTE_NONE)
+    df2 = pd.read_csv(Test_Data_File, sep='\t', quoting=csv.QUOTE_NONE)
+    cols = ['isSimilar', 'SentenceID1', 'SentenceID2', 'Sentence1', 'Sentence2']
+    df1.columns = cols
+    df2.columns = cols
+
+    for dataset in [df1, df2]:
+        for i, row in dataset.iterrows():
+            sentence1_list.append(row['Sentence1'])
+            sentence2_list.append(row['Sentence2'])
+            target_label_list.append(row['isSimilar'])
+    
+    sentence1_list_id = []
+    sentence1_list_ood = []
+    sentence2_list_id = []
+    sentence2_list_ood = []
+    target_label_list_id = []
+    target_label_list_ood = []
+
+    if id_ood == None:
+        #path = file_path.split('.')
+        #np.savetxt('.' + path[-2] + '_groundtruth.txt', target_label_list, '%s')
+        data = paws_dataset(sentence1_list, sentence2_list, target_label_list, tokenizer, MAX_LEN)
+        # print(data[0])
+        return data
+    else: 
+        assert(len(id_ood) == len(sentence1_list))
+        for i,label in enumerate(id_ood):
+            if label == 0:
+                sentence1_list_id.append(sentence1_list[i])
+                sentence2_list_id.append(sentence2_list[i])
+                target_label_list_id.append(target_label_list[i])
+            else:
+                sentence1_list_ood.append(sentence1_list[i])
+                sentence2_list_ood.append(sentence2_list[i])
+                target_label_list_ood.append(target_label_list[i])
+        data_id = paws_dataset(sentence1_list_id, sentence2_list_id, target_label_list_id, tokenizer, MAX_LEN)
+        data_ood = paws_dataset(sentence1_list_ood, sentence2_list_ood, target_label_list_ood, tokenizer, MAX_LEN)
         return data_id, data_ood

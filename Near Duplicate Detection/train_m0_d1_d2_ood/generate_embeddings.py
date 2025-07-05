@@ -6,6 +6,7 @@ import time
 import numpy as np
 import csv
 import argparse
+import pickle
 import math
 from sklearn.metrics import accuracy_score
 import torch
@@ -24,7 +25,7 @@ from transformers.modeling_outputs import TokenClassifierOutput
 import warnings
 from sklearn.model_selection import train_test_split
 from datasets import load_dataset
-from data_loader import load_mnli, load_hans, load_snli
+from data_loader import load_qqp, load_paws
 
 # Ignore all warnings
 warnings.filterwarnings("ignore")
@@ -41,12 +42,11 @@ num_labels = 3
 class MainModel(BertPreTrainedModel):
     def __init__(self, config, loss_fn = None):
         super(MainModel,self).__init__(config)
-        self.num_labels = 3
+        self.num_labels = 2
         self.loss_fn = loss_fn
         config.output_hidden_states = True
         self.bert = AutoModel.from_pretrained("bert-base-uncased",config = config)
-        self.hidden = nn.Linear(768, 2*(self.num_labels))
-        self.classifier = nn.Linear(2*(self.num_labels), self.num_labels)
+        self.classifier = nn.Linear(768, self.num_labels)
 
     def forward(self, input_ids, attention_mask, token_type_ids, labels,device):
               
@@ -64,6 +64,7 @@ def save_embeddings_to_text_file(embeddings, output_file_path):
                 else:
                     file.write(f'{emb}\n')
             
+
 def read_dataset(data_path):
     with open(data_path, 'rb') as inp:
         data = pickle.load(inp)
@@ -72,22 +73,18 @@ def read_dataset(data_path):
 def generate_embeddings(model, dataloader, device, output_file_path):
     embeddings = []
     total_embeddings = 0
-    labels = []
     for idx, batch in enumerate(tqdm(dataloader, ncols=100)):
         indexes = batch['index']
         input_ids = batch['ids'].to(device, dtype=torch.long)
         mask = batch['mask'].to(device, dtype=torch.long)
         targets = batch['target'].to(device, dtype=torch.long)
         token_type_ids = batch['token_type_ids'].to(device, dtype = torch.long)
-        labels.extend([target.item() for target in targets])
         with torch.no_grad():
             output = model(input_ids=input_ids, attention_mask=mask, token_type_ids = token_type_ids, labels=targets, device = device)
         embeddings = output.tolist()
         save_embeddings_to_text_file(embeddings, output_file_path)
         total_embeddings += len(embeddings)
     print(f'Total embeddings saved in {output_file_path} : {total_embeddings}')
-    if output_file_path == './Predictions/train_embeddings.txt':
-        np.savetxt('./Predictions/train_groundtruth.txt', labels)
     return embeddings
 
 def main():
@@ -99,50 +96,36 @@ def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--input_model_path', type=str, required=True)
-    parser.add_argument('--mnli_matched_path', type=str, required=True)
-    parser.add_argument('--mnli_mismatched_path', type=str, required=True)
-    parser.add_argument('--hans_file1_path', type=str, required=True)
-    parser.add_argument('--hans_file2_path', type=str, required=True)
     
     args = parser.parse_args()
 
     tokenizer = AutoTokenizer.from_pretrained(args.input_model_path)
-    
-    model = MainModel.from_pretrained(args.input_model_path,num_labels = 3, loss_fn = None)
+    model = MainModel.from_pretrained(args.input_model_path,num_labels = 2, loss_fn = None)
     device = 'cuda' if cuda.is_available() else 'cpu'
-    print(data.len)
     model.to(device)
 
-    
-
-    train_data = read_dataset('./train.pkl')
-    train_path = './Predictions/train_embeddings.txt'
-    train_dataloader = DataLoader(train_data, shuffle = False, batch_size=BATCH_SIZE)
-    generate_embeddings(model, train_dataloader, device, train_path)
 
     
 
-    mnli_mismatched = load_mnli(file_path=args.mnli_mismatched_path, tokenizer=tokenizer, type = False)
-    mnli_matched = load_mnli(file_path=args.mnli_matched_path, tokenizer=tokenizer, type = False)
-    data = ConcatDataset([mnli_matched, mnli_mismatched])
-    eval_dataloader = DataLoader(data, shuffle = False, batch_size=BATCH_SIZE)
-    mnli_m_embedding_path = './Predictions/MNLI/mnli_eval_embeddings.txt'
-    generate_embeddings(model, eval_dataloader, device, mnli_m_embedding_path)
+    data = read_dataset('./QQP/train_partition1.pkl')
+    dev_data = read_dataset('./QQP/val.pkl')
+    print(f'Train dataset len: {len(data)}')
+    print(f'Validation dataet len: {len(dev_data)}')
 
-
+    paws_data = read_dataset('./QQP/train_partition2.pkl')
+    paws_dataloader = DataLoader(paws_data, shuffle = False, batch_size=BATCH_SIZE)
+    train_dataloader = DataLoader(data, shuffle = False, batch_size=BATCH_SIZE)
+    eval_dataloader = DataLoader(dev_data, shuffle=False, batch_size=BATCH_SIZE)
+    
+    qqp_train_embedding_path = './Predictions/QQP/qqp_train_partition1_embeddings.txt'
+    generate_embeddings(model, train_dataloader, device, qqp_train_embedding_path)
     
 
-    #loding HANS data
-    data1 = load_hans(file_path=args.hans_file1_path, tokenizer=tokenizer)
-    hans_data = data1
-    hans_test_dataloader = DataLoader(hans_data, shuffle = False, batch_size=BATCH_SIZE)
-    hans_embedding_path = './Predictions/HANS/HANS_embeddings.txt'
-    generate_embeddings(model, hans_test_dataloader, device, hans_embedding_path)
+    paws_eval_embedding_path = './Predictions/QQP/qqp_eval_embeddings.txt'
+    generate_embeddings(model, eval_dataloader, device, paws_eval_embedding_path)
 
-    snli_data = load_snli(file_path='./snli_1.0/snli_1.0_test.txt', tokenizer=tokenizer)
-    snli_test_dataloader = DataLoader(snli_data, shuffle = False, batch_size=BATCH_SIZE)
-    snli_embedding_path = './Predictions/SNLI/SNLI_embeddings.txt'
-    generate_embeddings(model, snli_test_dataloader, device, snli_embedding_path)
+    paws_test_embedding_path = './Predictions/QQP/qqp_train_partition2_embeddings.txt'
+    generate_embeddings(model, paws_dataloader, device, paws_test_embedding_path)
 
     end = time.time()
     total_time = end - start
